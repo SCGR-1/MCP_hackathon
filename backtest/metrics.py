@@ -10,7 +10,7 @@ Number = Union[int, float]
 
 def compute_max_drawdown(equity: pd.Series) -> float:
     """
-    计算最大回撤（0~1 之间），基于资金曲线。
+    Calculate maximum drawdown (0-1) based on equity curve.
     """
     if equity.empty:
         return 0.0
@@ -22,7 +22,7 @@ def compute_max_drawdown(equity: pd.Series) -> float:
 
 def annualized_return(equity: pd.Series) -> float:
     """
-    简单年化收益率，假设一年 252 个交易日。
+    Calculate annualized return, assuming 252 trading days per year.
     """
     if equity.empty:
         return 0.0

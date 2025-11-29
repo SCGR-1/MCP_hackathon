@@ -2,13 +2,13 @@ import os
 import requests
 import pprint
 
-print("脚本启动了。")  # 调试：确认脚本确实在执行
+print("Script started.")
 
 API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
-print("读到的 API_KEY:", "存在" if API_KEY else "空")
+print("API_KEY:", "exists" if API_KEY else "empty")
 
 if not API_KEY:
-    print("环境变量 ALPHAVANTAGE_API_KEY 没有设置，退出。")
+    print("ALPHAVANTAGE_API_KEY environment variable not set, exiting.")
     raise SystemExit(1)
 
 url = "https://www.alphavantage.co/query"
@@ -20,20 +20,20 @@ params = {
     "datatype": "json",
 }
 
-print("即将请求 AlphaVantage ...")
+print("Requesting AlphaVantage...")
 try:
-    resp = requests.get(url, params=params, timeout=10)  # 加了 timeout，防止一直卡住
+    resp = requests.get(url, params=params, timeout=10)
 except Exception as e:
-    print("请求阶段直接报错：", repr(e))
+    print("Request failed:", repr(e))
     raise SystemExit(1)
 
-print("HTTP 状态码:", resp.status_code)
-print("原始响应前 500 字符：")
+print("HTTP status code:", resp.status_code)
+print("First 500 characters of response:")
 print(resp.text[:500])
 
-print("\n尝试解析为 JSON：")
+print("\nAttempting to parse as JSON:")
 try:
     data = resp.json()
     pprint.pprint(data)
 except Exception as e:
-    print("解析 JSON 失败：", repr(e))
+    print("JSON parsing failed:", repr(e))

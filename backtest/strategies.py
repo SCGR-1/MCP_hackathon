@@ -13,11 +13,10 @@ def _build_result(
     trades: List[Dict[str, Any]],
     initial_cash: float,
 ) -> Dict[str, Any]:
-    """共用的结果封装 + 指标计算"""
+    """Common result builder with metrics calculation"""
     equity_df = pd.DataFrame(equity_list, columns=["date", "equity"])
 
     if equity_df.empty:
-        # 防御：极端情况下没有任何 equity 记录
         return {
             "equity_curve": [],
             "trades": [],
@@ -61,23 +60,21 @@ def _build_result(
     }
 
 
-# ========== 策略 1：均线交叉（ma_cross） ==========
-
 def run_ma_cross_strategy(
     df: pd.DataFrame,
     params: Dict[str, Any],
     initial_cash: float = 10000.0,
 ) -> Dict[str, Any]:
     """
-    均线交叉策略：
-    - 短均线上穿长均线：全仓买入
-    - 短均线下穿长均线：全部卖出
+    Moving average crossover strategy:
+    - Buy when short MA crosses above long MA
+    - Sell when short MA crosses below long MA
     """
     short_window = int(params.get("short_window", 20))
     long_window = int(params.get("long_window", 60))
 
     if short_window >= long_window:
-        raise ValueError("ma_cross 策略中，short_window 必须小于 long_window。")
+        raise ValueError("short_window must be less than long_window in ma_cross strategy")
 
     prices = df["close"].copy()
 
@@ -90,7 +87,7 @@ def run_ma_cross_strategy(
     equity_list: List[Tuple[pd.Timestamp, float]] = []
     trades: List[Dict[str, Any]] = []
 
-    last_signal = 0  # 0: 空仓, 1: 持多
+    last_signal = 0  # 0: no position, 1: long position
     entry_price = None
     entry_date = None
 
@@ -100,7 +97,6 @@ def run_ma_cross_strategy(
         ma_s = df_ma.loc[i, "ma_short"]
         ma_l = df_ma.loc[i, "ma_long"]
 
-        # 均线未形成，记录权益但不交易
         if np.isnan(ma_s) or np.isnan(ma_l):
             equity = cash + shares * price
             equity_list.append((date, equity))
@@ -112,25 +108,20 @@ def run_ma_cross_strategy(
             prev_ma_s = df_ma.loc[i - 1, "ma_short"]
             prev_ma_l = df_ma.loc[i - 1, "ma_long"]
             signal = last_signal
-            # 金叉
             if (prev_ma_s <= prev_ma_l) and (ma_s > ma_l):
                 signal = 1
-            # 死叉
             elif (prev_ma_s >= prev_ma_l) and (ma_s < ma_l):
                 signal = 0
 
-        # 执行交易
         if signal == 1 and last_signal == 0:
-            # 买入
             if cash > 0:
-                shares = cash // price  # 整股
+                shares = cash // price
                 cost = shares * price
                 cash -= cost
                 entry_price = price
                 entry_date = date
 
         elif signal == 0 and last_signal == 1:
-            # 卖出
             if shares > 0:
                 proceeds = shares * price
                 cash += proceeds
@@ -159,25 +150,23 @@ def run_ma_cross_strategy(
     return _build_result(equity_list, trades, initial_cash)
 
 
-# ========== 策略 2：定投（dca） ==========
-
 def run_dca_strategy(
     df: pd.DataFrame,
     params: Dict[str, Any],
     initial_cash: float = 10000.0,
 ) -> Dict[str, Any]:
     """
-    定投策略（Dollar-Cost Averaging）：
-    - 每隔 interval_days 天，投入固定金额 buy_amount 买入
-    - 全程不卖出，最终在结束日计算总体收益
+    Dollar-Cost Averaging (DCA) strategy:
+    - Invest fixed amount buy_amount every interval_days
+    - No selling, calculate total return at end date
     """
-    interval_days = int(params.get("interval_days", 7))  # 默认每 7 天一次
+    interval_days = int(params.get("interval_days", 7))
     buy_amount = float(params.get("buy_amount", 1000.0))
 
     if interval_days <= 0:
-        raise ValueError("dca 策略中，interval_days 必须为正整数。")
+        raise ValueError("interval_days must be a positive integer in dca strategy")
     if buy_amount <= 0:
-        raise ValueError("dca 策略中，buy_amount 必须大于 0。")
+        raise ValueError("buy_amount must be greater than 0 in dca strategy")
 
     cash = initial_cash
     shares = 0.0
@@ -190,7 +179,6 @@ def run_dca_strategy(
         date = df.loc[i, "date"]
         price = df.loc[i, "close"]
 
-        # 是否需要买入
         should_buy = False
         if last_buy_date is None:
             should_buy = True
@@ -217,7 +205,6 @@ def run_dca_strategy(
         equity = cash + shares * price
         equity_list.append((date, equity))
 
-    # 结束时按最后一天价格计算每笔定投的 pnl
     trades: List[Dict[str, Any]] = []
     if len(df) > 0 and raw_trades:
         final_date = df["date"].iloc[-1]
@@ -240,7 +227,51 @@ def run_dca_strategy(
     return _build_result(equity_list, trades, initial_cash)
 
 
-# ========== 通用分发入口 ==========
+def run_buy_and_hold_strategy(
+    df: pd.DataFrame,
+    params: Dict[str, Any],
+    initial_cash: float = 10000.0,
+) -> Dict[str, Any]:
+    """
+    Buy & Hold strategy:
+    - Buy at first bar's open price using buy_fraction * initial_cash
+    - No further trading, equity = shares * close_price
+    """
+    buy_fraction = params.get("buy_fraction", 1.0)
+
+    first_price = df.iloc[0]["open"]
+    cash_to_use = initial_cash * buy_fraction
+
+    if first_price <= 0:
+        raise ValueError("Invalid first price")
+
+    shares = cash_to_use / first_price
+    entry_date = df.iloc[0]["date"]
+    entry_price = float(first_price)
+    final_date = df.iloc[-1]["date"]
+    final_price = float(df.iloc[-1]["close"])
+
+    equity_list: List[Tuple[pd.Timestamp, float]] = []
+    for _, row in df.iterrows():
+        equity = shares * row["close"]
+        equity_list.append((row["date"], equity))
+
+    trades: List[Dict[str, Any]] = []
+    if len(df) > 0:
+        pnl = (final_price - entry_price) * shares
+        trades.append({
+            "entry_date": entry_date.strftime("%Y-%m-%d"),
+            "exit_date": final_date.strftime("%Y-%m-%d"),
+            "entry_price": entry_price,
+            "exit_price": final_price,
+            "shares": float(shares),
+            "pnl": float(pnl),
+            "side": "long",
+            "strategy": "buy_and_hold",
+        })
+
+    return _build_result(equity_list, trades, initial_cash)
+
 
 def run_strategy(
     df: pd.DataFrame,
@@ -248,8 +279,8 @@ def run_strategy(
     initial_cash: float = 10000.0,
 ) -> Dict[str, Any]:
     """
-    通用策略入口：
-    strategy_config 形如：
+    Generic strategy entry point.
+    strategy_config format:
     {
         "type": "ma_cross" | "dca" | ...,
         "params": { ... }
@@ -262,5 +293,7 @@ def run_strategy(
         return run_ma_cross_strategy(df, params, initial_cash)
     elif stype == "dca":
         return run_dca_strategy(df, params, initial_cash)
+    elif stype == "buy_and_hold":
+        return run_buy_and_hold_strategy(df, params, initial_cash)
     else:
-        raise ValueError(f"不支持的策略类型: {stype}")
+        raise ValueError(f"Unsupported strategy type: {stype}")
