@@ -8,3 +8,4 @@ modal
 yfinance
 python-dotenv
 openai
+mcp[cli]

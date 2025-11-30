@@ -6,7 +6,13 @@ colorTo: green
 sdk: gradio
 app_file: app.py
 pinned: false
+tags:
+   - "building-mcp-track-xx"
 ---
+
+LinkedIn post: https://www.linkedin.com/feed/update/urn:li:activity:7400976801524629504/
+
+Demo video: https://youtu.be/EKdxNMhcD8I
 
 # LLM-Powered Strategy Backtesting
 
@@ -56,10 +62,15 @@ Alternatively, users can manually select a strategy type and set parameters dire
    - Invest a fixed amount at regular intervals
    - Parameters: `interval_days`, `buy_amount`
    - Supports `initial_cash` extraction from LLM
+   - Note: For DCA, the displayed "Initial Cash" metric represents total invested (initial cash + all periodic investments)
 
 3. **Buy and Hold**
    - Purchase at the start and hold until the end
    - Parameters: `buy_fraction` (default: 1.0)
+
+4. **Other**
+   - Returns when the strategy description doesn't match any of the above
+   - Parameters: `{}` (empty)
 
 ### Backtesting Metrics
 - Initial Cash / Final Equity
@@ -97,8 +108,9 @@ Alternatively, users can manually select a strategy type and set parameters dire
    ```env
    ALPHAVANTAGE_API_KEY=your_alphavantage_api_key
    MODAL_STRATEGY_URL=https://your-username--strategy-config-service-strategy-config-web.modal.run
-   OPENAI_API_KEY=your_openai_api_key
    ```
+   
+   **Note:** `OPENAI_API_KEY` is not needed in `.env` for local development. The Modal endpoint uses the API key from Modal Secret. However, if you want to test LLM parsing locally, you can optionally add it.
 
 4. **Deploy Modal endpoint**
    
@@ -139,6 +151,9 @@ The Gradio interface will be available at `http://127.0.0.1:7860`
 - "Buy when 10-day MA crosses above 50-day MA, sell when it crosses below"
 - "DCA $1000 every 7 days, initial cash = 5000"
 - "Invest $500 weekly with starting capital $10000"
+- "Buy and hold long term with initial cash $20000"
+
+**Note:** The LLM automatically extracts `initial_cash` if mentioned in the description. If not mentioned, the system uses the default value from the UI (10000).
 
 ### Manual Mode
 
@@ -168,14 +183,19 @@ The UI includes validation to ensure dates are within the available range.
 ├── app.py                 # Main Gradio UI application
 ├── llm_strategy.py        # Client-side LLM strategy parser (calls Modal)
 ├── modal_app.py           # Modal deployment: LLM endpoint (OpenAI GPT-4o-mini)
+├── mcp_server.py          # MCP server implementation (FastMCP tools for strategy parsing and backtesting)
 ├── backtest/
+│   ├── __init__.py        # Package initialization
 │   ├── engine.py          # Backtest orchestrator
 │   ├── strategies.py      # Strategy implementations (ma_cross, dca, buy_and_hold)
 │   ├── data.py            # AlphaVantage data fetcher
 │   └── metrics.py         # Performance metrics calculation
 ├── requirements.txt       # Python dependencies
-└── README.md             # This file
+├── README.md             # This file
+└── .env                  # Environment variables (create this file)
 ```
+
+**Note:** Additional files like `mcp_client_http.py` and `test_client.py` may be present for MCP client testing but are not required for the core backtesting functionality.
 
 ---
 
@@ -226,7 +246,3 @@ The UI includes validation to ensure dates are within the available range.
 - Check network connectivity to Modal
 
 ---
-
-## License
-
-[Add your license here]
