@@ -1,3 +1,13 @@
+---
+title: Stock Backtest MCP
+emoji: 📈
+colorFrom: blue
+colorTo: green
+sdk: gradio
+app_file: app.py
+pinned: false
+---
+
 # LLM-Powered Strategy Backtesting
 
 A lightweight, modular backtesting application that converts **natural-language trading strategies** into structured executable strategies using OpenAI GPT-4o-mini.
