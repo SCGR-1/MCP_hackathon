@@ -20,4 +20,5 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          git push https://huggingface.co/spaces/MCP-1st-Birthday/Stock_Strategy_Backtest_MCP
+          git push https://MCP-1st-Birthday:${HF_TOKEN}@huggingface.co/spaces/MCP-1st-Birthday/Stock_Strategy_Backtest_MCP main
+
