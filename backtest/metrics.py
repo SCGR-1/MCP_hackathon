@@ -26,6 +26,8 @@ def annualized_return(equity: pd.Series) -> float:
     """
     if equity.empty:
         return 0.0
+    if equity.iloc[0] == 0:
+        return 0.0
     total_return = equity.iloc[-1] / equity.iloc[0] - 1.0
     n_days = len(equity)
     if n_days <= 1:

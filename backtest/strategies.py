@@ -31,7 +31,11 @@ def _build_result(
             },
         }
 
-    total_return = equity_df["equity"].iloc[-1] / equity_df["equity"].iloc[0] - 1.0
+    # Calculate total return safely
+    if equity_df["equity"].iloc[0] == 0:
+        total_return = 0.0
+    else:
+        total_return = equity_df["equity"].iloc[-1] / equity_df["equity"].iloc[0] - 1.0
     max_dd = compute_max_drawdown(equity_df["equity"])
     ann_ret = annualized_return(equity_df["equity"])
 
@@ -70,6 +74,9 @@ def run_ma_cross_strategy(
     - Buy when short MA crosses above long MA
     - Sell when short MA crosses below long MA
     """
+    if df.empty:
+        return _build_result([], [], initial_cash)
+    
     short_window = int(params.get("short_window", 20))
     long_window = int(params.get("long_window", 60))
 
@@ -157,9 +164,14 @@ def run_dca_strategy(
 ) -> Dict[str, Any]:
     """
     Dollar-Cost Averaging (DCA) strategy:
+    - Start with initial_cash
     - Invest fixed amount buy_amount every interval_days
+    - Each investment adds new funds (buy_amount) to available cash
     - No selling, calculate total return at end date
     """
+    if df.empty:
+        return _build_result([], [], initial_cash)
+    
     interval_days = int(params.get("interval_days", 7))
     buy_amount = float(params.get("buy_amount", 1000.0))
 
@@ -172,6 +184,7 @@ def run_dca_strategy(
     shares = 0.0
     equity_list: List[Tuple[pd.Timestamp, float]] = []
     raw_trades: List[Dict[str, Any]] = []
+    total_invested = initial_cash  # Track total money invested
 
     last_buy_date = None
 
@@ -179,15 +192,29 @@ def run_dca_strategy(
         date = df.loc[i, "date"]
         price = df.loc[i, "close"]
 
+        if price <= 0:
+            # Skip invalid prices
+            equity = cash + shares * price if shares > 0 else cash
+            equity_list.append((date, equity))
+            continue
+
         should_buy = False
         if last_buy_date is None:
+            # First buy on first trading day
             should_buy = True
         else:
+            # Calculate days since last buy (using calendar days, not trading days)
             delta_days = (date - last_buy_date).days
             if delta_days >= interval_days:
                 should_buy = True
 
-        if should_buy and cash > 0:
+        # Execute buy if conditions are met
+        if should_buy:
+            # Add new funds for this investment period
+            cash += buy_amount
+            total_invested += buy_amount
+            
+            # Invest the buy_amount (or remaining cash if less)
             invest = min(buy_amount, cash)
             if invest > 0:
                 buy_shares = invest / price
@@ -202,11 +229,12 @@ def run_dca_strategy(
                     }
                 )
 
+        # Calculate equity: remaining cash + value of shares at current price
         equity = cash + shares * price
         equity_list.append((date, equity))
 
     trades: List[Dict[str, Any]] = []
-    if len(df) > 0 and raw_trades:
+    if raw_trades and len(df) > 0:
         final_date = df["date"].iloc[-1]
         final_price = float(df["close"].iloc[-1])
         for t in raw_trades:
@@ -224,7 +252,9 @@ def run_dca_strategy(
                 }
             )
 
-    return _build_result(equity_list, trades, initial_cash)
+    # Use total_invested as the initial cash for metrics calculation
+    # This represents the total amount of money put into the strategy
+    return _build_result(equity_list, trades, total_invested)
 
 
 def run_buy_and_hold_strategy(
@@ -237,6 +267,9 @@ def run_buy_and_hold_strategy(
     - Buy at first bar's open price using buy_fraction * initial_cash
     - No further trading, equity = shares * close_price
     """
+    if df.empty:
+        return _build_result([], [], initial_cash)
+    
     buy_fraction = params.get("buy_fraction", 1.0)
 
     first_price = df.iloc[0]["open"]

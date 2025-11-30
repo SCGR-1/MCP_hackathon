@@ -23,7 +23,7 @@ def backtest_interface(
     symbol: str,
     start_date: str,
     end_date: str,
-    use_llm: bool,
+    mode: str,
     strategy_description: str,
     strategy_type: str,
     short_window: int,
@@ -32,63 +32,53 @@ def backtest_interface(
     dca_amount: float,
     initial_cash: float,
 ) -> Tuple[str, str, plt.Figure]:
-    """
-    Main Gradio logic:
-    1. If use_llm=True + description provided → call Modal LLM
-    2. Otherwise → use manual parameters
-    """
-    # Validate date range (AlphaVantage free tier only provides ~100 trading days)
+    # ---------------- 日期校验 ----------------
     try:
         start_dt = pd.to_datetime(start_date)
         end_dt = pd.to_datetime(end_date)
         max_days_ago = today - dt.timedelta(days=100)
-        
+
         if start_dt.date() < max_days_ago:
             return (
                 f"Error: Start date cannot be more than 100 days ago.\n"
                 f"AlphaVantage free API only provides ~100 trading days of data.\n"
                 f"Please use a start date after {max_days_ago.strftime('%Y-%m-%d')}",
                 "",
-                plt.figure()
+                plt.figure(),
             )
-        
+
         if start_dt > end_dt:
-            return (
-                "Error: Start date must be before end date.",
-                "",
-                plt.figure()
-            )
+            return ("Error: Start date must be before end date.", "", plt.figure())
     except Exception as e:
-        return (
-            f"Error: Invalid date format. Please use YYYY-MM-DD format.\n{e}",
-            "",
-            plt.figure()
-        )
-    
-    if use_llm and strategy_description.strip():
+        return (f"Error: Invalid date format. Please use YYYY-MM-DD.\n{e}", "", plt.figure())
+
+    symbol = symbol.strip()
+    if not symbol:
+        return ("Error: Stock symbol cannot be empty.", "", plt.figure())
+
+    if initial_cash is None or initial_cash <= 0:
+        return ("Error: Initial cash must be a positive number.", "", plt.figure())
+
+    # ---------------- LLM / Manual 分支 ----------------
+    use_llm = (mode == "LLM")
+
+    if use_llm:
+        if not strategy_description.strip():
+            return ("Error: Please enter a strategy description.", "", plt.figure())
         try:
             strategy_config = llm_generate_strategy_config(strategy_description.strip())
-            
-            # Check if LLM returned "other" strategy type
-            if strategy_config.get("type") == "other":
-                return (
-                    "Error: The strategy description does not match any supported strategy types.\n\n"
-                    "Supported strategies:\n"
-                    "- Moving Average Crossover (ma_cross): Buy/sell based on MA crossovers\n"
-                    "- Dollar-Cost Averaging (dca): Invest fixed amounts at regular intervals\n"
-                    "- Buy and Hold: Purchase and hold long-term\n\n"
-                    "Please describe one of these strategies, or use manual parameter mode.",
-                    "",
-                    plt.figure()
-                )
-            
-            # If LLM parsed initial_cash from description, use it instead of UI input
+            # Use initial_cash from LLM if provided, otherwise use UI value
             if "initial_cash" in strategy_config:
-                initial_cash = strategy_config.pop("initial_cash")
+                initial_cash = float(strategy_config.pop("initial_cash"))
         except Exception as e:
-            return f"LLM strategy parsing failed:\n{e}", "", plt.figure()
+            return (f"LLM strategy parsing failed:\n{e}", "", plt.figure())
     else:
+        # Manual 模式
         if strategy_type == "ma_cross":
+            if short_window <= 0 or long_window <= 0:
+                return ("Error: MA windows must be > 0.", "", plt.figure())
+            if short_window >= long_window:
+                return ("Error: Short MA window must be < long MA window.", "", plt.figure())
             strategy_config = {
                 "type": "ma_cross",
                 "params": {
@@ -97,6 +87,10 @@ def backtest_interface(
                 },
             }
         elif strategy_type == "dca":
+            if dca_interval_days <= 0:
+                return ("Error: DCA interval days must be > 0.", "", plt.figure())
+            if dca_amount <= 0:
+                return ("Error: DCA amount must be > 0.", "", plt.figure())
             strategy_config = {
                 "type": "dca",
                 "params": {
@@ -107,23 +101,22 @@ def backtest_interface(
         elif strategy_type == "buy_and_hold":
             strategy_config = {
                 "type": "buy_and_hold",
-                "params": {
-                    "buy_fraction": 1.0
-                },
+                "params": {"buy_fraction": 1.0},
             }
         else:
-            return f"Unsupported strategy type: {strategy_type}", "", plt.figure()
+            return (f"Unsupported strategy type: {strategy_type}", "", plt.figure())
 
+    # ---------------- 回测 ----------------
     try:
         result = run_backtest(
-            symbol=symbol.strip(),
+            symbol=symbol,
             start_date=start_date.strip(),
             end_date=end_date.strip(),
             strategy_config=strategy_config,
-            initial_cash=initial_cash,
+            initial_cash=float(initial_cash),
         )
     except Exception as e:
-        return f"Backtest failed: {e}", "", plt.figure()
+        return (f"Backtest failed: {e}", "", plt.figure())
 
     metrics = result["metrics"]
     trades = result["trades"]
@@ -155,37 +148,38 @@ def backtest_interface(
     else:
         trades_text = "No trades (strategy generated no signals)"
 
+    if not equity_curve:
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.text(0.5, 0.5, "No equity curve data available", ha="center", va="center", transform=ax.transAxes)
+        ax.set_title(f"Equity Curve - {result['symbol']}")
+        return metrics_text, trades_text, fig
+
     dates = [pd.to_datetime(p["date"]) for p in equity_curve]
     equity = [p["equity"] for p in equity_curve]
 
-    # Clear any previous figure state
-    plt.close('all')
+    plt.close("all")
     fig, ax = plt.subplots(figsize=(10, 5))
-    
-    # Plot the data
     ax.plot(dates, equity, linewidth=1.5)
     ax.set_title(f"Equity Curve - {result['symbol']}")
     ax.set_xlabel("Date")
     ax.set_ylabel("Equity")
     ax.grid(True, alpha=0.3)
-    
-    # Set x-axis range to full start_date to end_date range
-    start_dt = pd.to_datetime(result['start_date'])
-    end_dt = pd.to_datetime(result['end_date'])
+
+    start_dt = pd.to_datetime(result["start_date"])
+    end_dt = pd.to_datetime(result["end_date"])
     ax.set_xlim([start_dt, end_dt])
-    
-    # Format dates based on the full date range
+
     date_range = (end_dt - start_dt).days
     if date_range <= 30:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
         ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, date_range // 10)))
     elif date_range <= 365:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
         ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=2))
     else:
-        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
         ax.xaxis.set_major_locator(mdates.MonthLocator(interval=max(1, date_range // 365)))
-    
+
     fig.autofmt_xdate(rotation=45)
 
     return metrics_text, trades_text, fig
@@ -194,62 +188,52 @@ def backtest_interface(
 with gr.Blocks(title="LLM-Powered Strategy Backtesting") as demo:
     gr.Markdown(
         """
-        # Stock Strategy Backtesting (Natural Language Supported)
+        # Stock Strategy Backtesting
 
-        You can define strategies in two ways:
-
-        ### 1. Natural Language (Recommended)
-        - Check "Use LLM to parse strategy"
-        - Enter strategy description (English/Chinese)
-        - Examples:
-            - "Buy when 10-day MA crosses above 50-day MA, sell when it crosses below"
-            - "Invest $1000 every 7 days in AAPL"
-
-        ### 2. Manual Parameters
-        - Disable LLM
-        - Manually select strategy type and parameters
+        Choose a strategy mode:
+        - **LLM**: Describe your strategy in natural language
+        - **Manual**: Select a strategy type and set parameters
         """
     )
 
     with gr.Row():
         with gr.Column():
             symbol = gr.Textbox(label="Stock Symbol", value="AAPL")
-            start_date = gr.Textbox(
-                label="Start Date (YYYY-MM-DD)", 
-                value=str(default_start),
-                placeholder=f"Must be within last 100 days (after {(today - dt.timedelta(days=100)).strftime('%Y-%m-%d')})"
-            )
+            start_date = gr.Textbox(label="Start Date (YYYY-MM-DD)", value=str(default_start))
             end_date = gr.Textbox(label="End Date (YYYY-MM-DD)", value=str(default_end))
-            gr.Markdown(
-                f"<small>⚠️ Note: AlphaVantage free API provides ~100 trading days of data. "
-                f"Start date should be after {(today - dt.timedelta(days=100)).strftime('%Y-%m-%d')}</small>"
-            )
 
-            use_llm = gr.Checkbox(label="Use LLM to parse natural language strategy", value=True)
+            mode = gr.Dropdown(
+                label="Strategy Mode",
+                choices=["LLM", "Manual"],
+                value="LLM",
+            )
 
             strategy_description = gr.Textbox(
-                label="Strategy Description (when LLM is enabled)",
+                label="Strategy Description (for LLM mode)",
                 lines=4,
-                placeholder="Example: Buy when 10-day MA crosses above 50-day MA, sell when it crosses below; or: Invest $1000 every 7 days.",
+                placeholder="Example: Buy when 10-day MA crosses above 50-day MA; or invest $1000 every 7 days.",
             )
 
             strategy_type = gr.Dropdown(
-                label="Strategy Type (Manual Mode)",
-                choices=["ma_cross", "dca","buy_and_hold"],
+                label="Manual Strategy Type",
+                choices=["ma_cross", "dca", "buy_and_hold"],
                 value="ma_cross",
             )
 
-            gr.Markdown("### ma_cross Parameters (Manual)")
-            short_window = gr.Slider(5, 60, value=20, label="Short MA Window")
-            long_window = gr.Slider(20, 200, value=60, label="Long MA Window")
+            gr.Markdown("### MA Cross Parameters (used when Manual + ma_cross)")
+            short_window = gr.Slider(5, 60, value=20, step=1, label="Short MA Window")
+            long_window = gr.Slider(20, 200, value=60, step=1, label="Long MA Window")
 
-            gr.Markdown("### dca Parameters (Manual)")
-            dca_interval_days = gr.Slider(3, 30, value=7, label="DCA Interval (Days)")
+            gr.Markdown("### DCA Parameters (used when Manual + dca)")
+            dca_interval_days = gr.Slider(3, 30, value=7, step=1, label="DCA Interval (Days)")
             dca_amount = gr.Number(value=1000, label="DCA Amount per Period")
 
-            initial_cash = gr.Number(value=10000, label="Initial Cash")
+            gr.Markdown("### Buy and Hold Parameters (used when Manual + buy_and_hold)")
+            gr.Markdown("No extra parameters. Strategy uses 100% of initial cash to buy and hold.")
 
-            run_btn = gr.Button("Run Backtest")
+            initial_cash = gr.Number(value=10000, label="Initial Cash (USD)")
+
+            run_btn = gr.Button("Run Backtest", variant="primary")
 
         with gr.Column():
             metrics_out = gr.Textbox(label="Backtest Metrics", lines=14)
@@ -260,12 +244,12 @@ with gr.Blocks(title="LLM-Powered Strategy Backtesting") as demo:
         backtest_interface,
         [
             symbol, start_date, end_date,
-            use_llm, strategy_description,
+            mode, strategy_description,
             strategy_type, short_window, long_window,
             dca_interval_days, dca_amount,
-            initial_cash
+            initial_cash,
         ],
-        [metrics_out, trades_out, equity_plot]
+        [metrics_out, trades_out, equity_plot],
     )
 
 
